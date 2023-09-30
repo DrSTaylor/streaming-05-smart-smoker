@@ -1,23 +1,23 @@
 """
     This program sends a message to a queue on the RabbitMQ server.
     Make tasks harder/longer-running by adding dots at the end of the message.
-    Modify your producer to slowly read tasks from tasks.csv instead of the console
+    Modify your producer to slowly read tasks from smoker-temps.csv and send them to RabbitMQ.
 
     Author: Sara Taylor
     Date: September 29, 2023
 
 """
-
-
-import pika
+import pika 
 import sys
 import webbrowser
 import logging
 import time
 import csv
 
+
 from util_logger import setup_logger
 logger, logname = setup_logger(__file__)
+
 
 
 #Declare constants
@@ -66,7 +66,7 @@ def send_message( host: str, queue_name: str, message: str):
     This process runs and finishes.
 
     Parameters:
-        input_file_name (str): The name of the CSV file
+
         host (str): the host name or IP address of the RabbitMQ server
         queue_name (str): the name of the queue
         message (str): the message to be sent to the queue
@@ -117,18 +117,16 @@ def send_csv_messages (host: str, queue_name1: str, queue_name2: str, queue_name
         ch.queue_declare(queue=queue_name3, durable=True) # for "03-food-B"
         
         logger.info(f"Reading messages from {input_file_name}...")
-        with open(input_file_name, 'r') as input_file:
-            reader = csv.reader(input_file)
+        with open(input_file_name, 'r', encoding="utf-8") as input_file:
+            reader = csv.reader(input_file, delimiter=",")
             next(reader, None) # skip the header row
             for row in reader:
-                timestamp = row[0]
-            
             # send the messages to the desired queue
                 send_message(host,queue_name1,prepare_message(row,1))
                 send_message(host,queue_name2,prepare_message(row,2))
                 send_message(host,queue_name3,prepare_message(row,3))
                 time.sleep(30) # wait 30 seconds between messages
-                logger.info(f"Sent message {row} to {queue_name1}...")  
+
     except pika.exceptions.AMQPConnectionError as e:
         print(f"Error: Connection to RabbitMQ server failed: {e}")
         sys.exit(1)
