@@ -15,17 +15,18 @@ import time
 import csv
 
 
-from util_logger import setup_logger
-logger, logname = setup_logger(__file__)
-
+# Set up basic configuration for logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
 #Declare constants
-INPUT_FILE_NAME = ("\smoker-temps.csv")
+INPUT_FILE_NAME = ("smoker-temps.csv")
 HOST = "localhost"
-QUEUE1 = "01-smoker"
-QUEUE2 = "02-food-A"
-QUEUE3 = "03-food-B"
+PORT = 9999
+ADDRESS_TUPLE = (HOST, PORT)
+
 
 def offer_rabbitmq_admin_site():
     """Offer to open the RabbitMQ Admin website"""
@@ -34,105 +35,69 @@ def offer_rabbitmq_admin_site():
     if ans.lower() == "y":
         webbrowser.open_new("http://localhost:15672/#/queues")
         print()
-def prepare_message(row,field_index):
-    """
-    Returns timestamp and the desired field index value to send as a tuple
-    Checks if the field_value is not empty then it will be a float value, else it will pass
-    that no data was received from the row. 
-    """
-    timestamp = row[0]
-    if field_index < len(row):
-        field_value_str = row[field_index]
-        if field_value_str:  # Check if the field_value_str is not empty
-            try:
-                field_value = float(field_value_str)
-            except ValueError:
-                field_value = "Invalid float value"
-        else:
-            field_value = "No data received from row"
-    else:
-        field_value = "No data received from row"
 
-    # construct binary message from data
-    fstring_message= f"[{timestamp},{field_value}]"
-    message = fstring_message.encode()
+def send_message(ch, queue_name, timestamp, temperature):
+    if temperature is not None:  # Check if temperature is not None
+        ch.basic_publish(exchange="", routing_key=queue_name, body=f"{timestamp},{temperature}")
+        logging.info(f"Sent to {queue_name} Queue: Timestamp={timestamp}, Temperature={temperature}")
 
-    logger.info(f"Prepared binary message {message}....")
 
-    return message
-def send_message( host: str, queue_name: str, message: str):
+def main():
     """
-    Creates and sends a message to the queue each execution.
+    Delete existing queues.
+    Declare new queues.
+    Read from csv file.
+    Send messages to queue based on which column is being read from the csv.
     This process runs and finishes.
-
-    Parameters:
-
-        host (str): the host name or IP address of the RabbitMQ server
-        queue_name (str): the name of the queue
-        message (str): the message to be sent to the queue
     """
 
     try:
         # create a blocking connection to the RabbitMQ server
-        conn = pika.BlockingConnection(pika.ConnectionParameters(host))
+        conn = pika.BlockingConnection(pika.ConnectionParameters(HOST))
         # use the connection to create a communication channel
         ch = conn.channel()
+        # Delete the queues if they exist
+        ch.queue_delete(queue="01-smoker")
+        ch.queue_delete(queue="02-food-A")
+        ch.queue_delete(queue="03-food-B")
         # use the channel to declare a durable queue
         # a durable queue will survive a RabbitMQ server restart
         # and help ensure messages are processed in order
         # messages will not be deleted until the consumer acknowledges
-        ch.queue_declare(queue=queue_name, durable=True)
-        # use the channel to publish a message to the queue
-        # every message passes through an exchange
-        ch.basic_publish(exchange="", routing_key=queue_name, body=message)
-        # print a message to the console for the user
-        print(f" [x] Sent {message}")
+        ch.queue_declare(queue="01-smoker", durable=True)
+        ch.queue_declare(queue="02-food-A", durable=True)
+        ch.queue_declare(queue="03-food-B", durable=True)
+        # open and read the csv file
+        with open(INPUT_FILE_NAME, "r", newline="") as csvfile:
+                reader = csv.reader(csvfile)
+                next(reader)  # Skip header row if it exists
+
+                # iterate over each row in the csv and assign the values in each column of that row to a variable
+                for row in reader:
+                    timestamp = row[0]
+                    smoker_temp = float(row[1]) if row [1] else None # Handle empty string
+                    food_a_temp = float(row[2]) if row [2] else None # Handle empty string
+                    food_b_temp = float(row[3]) if row [3] else None # Handle empty string
+
+                    # Send messages to 3 different RabbitMQ queues using the send_message function referenced above
+                    # messages sent to different queues based on which variable is being referenced
+                    send_message(ch, "01-smoker", timestamp, smoker_temp)
+                    send_message(ch, "02-food-A", timestamp, food_a_temp)
+                    send_message(ch, "03-food-B", timestamp, food_b_temp)
+
+                    # Wait for 30 seconds before processing the next batch of records
+                    time.sleep(30)
+                    # print a message to the console for the user
+                    logging.info(f"Sent: Timestamp={timestamp}, Smoker Temp={smoker_temp}, Food A Temp={food_a_temp}, Food B Temp={food_b_temp}")
+                    # print a reminder about how to cancel the program's run
+                    logging.info("------------------------------------------------Type CTRL+C to cancel the programs run---------------------------------------------------")
     except pika.exceptions.AMQPConnectionError as e:
-        print(f"Error: Connection to RabbitMQ server failed: {e}")
+        logging.error(f"Error: Connection to RabbitMQ server failed: {e}")
         sys.exit(1)
     finally:
         # close the connection to the server
         conn.close()
-    
-def send_csv_messages (host: str, queue_name1: str, queue_name2: str, queue_name3: str, input_file_name: csv):
-    """
-    Read input CSV file and send each row as a message to the listening_workers.
-    
-    Parameters:
-        input_file_name (str): The name of the CSV file
-        host (str): host name or IP address of the rabbitmq server
-        queue_name1 (str): the smoker temp queue name
-        queue_name2 (str): the food A temp queue name
-        queue_name3 (str): the food B temp queue name
-    """
-    try:
 
-        # create a blocking connection to the RabbitMQ server
-        conn = pika.BlockingConnection(pika.ConnectionParameters(host))
-        # use the connection to create a communication channel for Smoker Temp
-        ch = conn.channel()
-        # use the channel to declare a durable queue
-        ch.queue_declare(queue=queue_name1, durable=True) # for "01-smoker"
-        ch.queue_declare(queue=queue_name2, durable=True) # for "02-food-A"
-        ch.queue_declare(queue=queue_name3, durable=True) # for "03-food-B"
-        
-        logger.info(f"Reading messages from {input_file_name}...")
-        with open(input_file_name, 'r', encoding="utf-8") as input_file:
-            reader = csv.reader(input_file, delimiter=",")
-            next(reader, None) # skip the header row
-            for row in reader:
-            # send the messages to the desired queue
-                send_message(host,queue_name1,prepare_message(row,1))
-                send_message(host,queue_name2,prepare_message(row,2))
-                send_message(host,queue_name3,prepare_message(row,3))
-                time.sleep(30) # wait 30 seconds between messages
-
-    except pika.exceptions.AMQPConnectionError as e:
-        print(f"Error: Connection to RabbitMQ server failed: {e}")
-        sys.exit(1)
-    finally:
-        # Close the connection to the server
-        conn.close()
 
 # Standard Python idiom to indicate main program entry point
 # This allows us to import this module and use its functions
@@ -144,4 +109,4 @@ if __name__ == "__main__":
     offer_rabbitmq_admin_site()
 
     # Send messages from the CSV file and send them to RabbitMQ
-    send_csv_messages(INPUT_FILE_NAME,HOST,QUEUE1,QUEUE2,QUEUE3)
+    main()
